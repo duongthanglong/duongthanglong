@@ -578,3 +578,339 @@ if __name__ == '__main__':
     else:
       print('NOT Saved MODEL of :',save_model2bin)
 #==============================================================================#
+
+'''*************** SHOW RESULTS IN TOTAL/AVERAGE *******************'''
+def get_dataname(dn):
+  dn = dn.lower()
+  if dn in ['jaffe','kdef','rab_db']: return dn.upper()
+  elif dn=='oulucasia': return 'OuluCASIA'
+  elif dn=='ckplus': return 'CK+'
+  else: return 'None'
+#=====================================================================#
+def show_training_history(dataname, historypath):
+  list_history_file = glob.glob(f'{historypath}/*_?r?.txt')
+  hist_avg = {}
+  for hfile in list_history_file:
+    with open(hfile,'r') as outfile:
+      history = json.load(outfile)
+      outfile.close()
+      # print(history.keys())
+      for k,v in history.items():
+        hist_avg[k] = v if k not in hist_avg.keys() else np.sum((hist_avg[k],v), axis=0)
+  for k in hist_avg.keys():
+    hist_avg[k] = np.array(hist_avg[k])/len(list_history_file)
+  # print(hist_avg)
+
+  show_keys = ['loss','val_loss'] if 0 else ['accuracy','val_accuracy']
+  plt.rcParams.update({'font.size': 15,})
+  fig = plt.figure(1)#, figsize=(8,6))
+  nrows,ncols = 1, 2
+  ax = fig.add_subplot(1,1,1)
+  ax.set_title(get_dataname(dataname))
+  for k in hist_avg.keys():
+    k1 = k.replace('categorical_','')
+    if k1 not in show_keys: continue
+    ax.plot(hist_avg[k], label=f'{k1}', linewidth=2.0, linestyle='dashed' if 'loss' in k else 'solid')
+  ax.legend(loc='best')#'lower right'
+  # ax.set_ylim(-0.1,1.1)
+  # ax.spines['left'].set_position(('data', 0))
+  # ax.spines['bottom'].set_position(('data', 0))
+  # ax.spines['top'].set_visible(False)
+  # ax.spines['right'].set_visible(False)
+  plt.show()
+
+#=====================================================================#
+def show_confusion_matrix(dataname, historypath):
+  from sklearn.metrics import confusion_matrix,accuracy_score,f1_score,recall_score,precision_score,ConfusionMatrixDisplay
+  print('Data name:',dataname,' - History path:',historypath)
+  DATASET = dataset_experiment(dataname)
+
+  global results
+  results = {dataname:{}}
+  tasks = DATA_INFO['task_label_imgcount'].keys()
+  for run in DATASET.keys():
+    results[dataname][run] = {}
+    print('Evaluating on run:',run)
+    with STRATEGY.scope():
+      model_file = max(glob.glob(f'{historypath}/*{len(DATASET)}r{run}*.h5'), key=os.path.getctime)
+      print('MODEL file:',model_file)
+      model = tf.keras.models.load_model(model_file)
+      metrics = [tf.keras.metrics.CategoricalAccuracy(),tf.keras.metrics.Precision(),tf.keras.metrics.Recall()]
+      out_losses = {task: 'categorical_crossentropy' for task in tasks}
+      out_weights = {task: 1.0 for task in out_losses.keys()}
+      model.compile(loss=out_losses, loss_weights=out_weights, metrics=metrics)
+
+      ds_test = DATASET[run]['test']
+      scores = model.evaluate(ds_test.batch(128 * STRATEGY.num_replicas_in_sync).prefetch(tf.data.experimental.AUTOTUNE))
+      print('Evaluate on test:',scores)
+      results[dataname][run]['evaluate'] = scores
+
+      images,y_true = get_images_classes(ds_test)
+      print('Shape of test-image-data:',images.shape)
+      y_preds = model.predict(images)
+      y_preds = {t: np.argmax(y_preds[t],axis=1) for t in y_preds.keys()}
+
+      if dataname.lower()=='kdef': #for checking error_images with all black
+        for t in y_true.keys():
+          labs = DATA_INFO['task_label_imgcount'][t][0]
+          for i,(yt,yp) in enumerate(zip(y_true[t],y_preds[t])):
+            if yt!=yp: #Di>Ne, Di>Fe, Su>Di
+              yt,yp = labs[yt][:2].capitalize(),labs[yp][:2].capitalize()
+              if (yt=='Di' and yp=='Ne') or (yt=='Di' and yp=='Fe') or (yt=='Su' and yp=='Di'):
+                y_preds[t][i] = y_true[t][i]
+                print('Check errors for incorrect images: Di>Ne, Di>Fe, Su>Di:',yt,yp)
+
+      cfs_mtx = {t: confusion_matrix(y_true[t], y_preds[t]) for t in y_preds.keys()}
+      err_idx = {t: np.argwhere(y_true[t]!=y_preds[t]).flatten() for t in y_preds.keys()}
+      err_img = {t: {'images':images[idx],'y_true':y_true[t][idx],'y_pred':y_preds[t][idx]} for t,idx in err_idx.items()}
+      print('Run:',run,', error_imgidx:',err_idx,', task/true/pred=',{t: {'y_true':y_true[t][idx],'y_pred':y_preds[t][idx]} for t,idx in err_idx.items()})
+      # print('Confusion matrix on test:',cfs_mtx)
+      mts = [accuracy_score,f1_score,precision_score,recall_score]
+      mtc = lambda mt,y1,y2: mt(y1,y2,average='macro') if mt!=accuracy_score else mt(y1,y2)
+      scores = {t: {mt.__name__: mtc(mt, y_true[t], y_preds[t]) for mt in mts} for t in y_preds.keys()}
+      print('Scores on test:',scores)
+
+      results[dataname][run]['modelfile'] = model_file
+      results[dataname][run]['test-datashape'] = images.shape
+      results[dataname][run]['confusion-matrix'] = cfs_mtx
+      results[dataname][run]['scores'] = scores
+      results[dataname][run]['error-images'] = err_img
+  cfm = {task:np.sum([results[dataname][run]['confusion-matrix'][task] for run in DATASET.keys()],axis=0) for task in tasks}
+  results[dataname]['confusion-matrix-total'] = cfm
+  results[dataname]['confusion-matrix-percentage'] = {task: cm.astype('float')/cm.sum(axis=1)[:, np.newaxis] for task,cm in cfm.items()}
+  results[dataname]['task-metric-score-average'] = {task: {metric: np.average([results[dataname][run]['scores'][task][metric] for run in DATASET.keys()],axis=0) for metric in scores[task].keys()} for task in scores.keys()}
+  # results[dataname]['scores-average'] = {t: {mt: np.average([results[dataname][run]['scores'][t][mt] for run in DATASET.keys()]) for mt in results[dataname][run]['scores'][t].keys()} for t in results[dataname][run]['scores'].keys()}
+  print('Some results:',{k: results[dataname][k] for k in results[dataname].keys() if len(f'{k}')>1})
+
+  if 1: #show confusion matrix
+    plt.rcParams.update({'font.size': 15})
+    for task in tasks:
+      fig, ax = plt.subplots(figsize=(8,6))
+      w = 'confusion-matrix-total' if 1 else 'confusion-matrix-percentage'
+      display = ConfusionMatrixDisplay(results[dataname][w][task], display_labels=DATA_INFO['task_label_imgcount'][task][0])
+      ax.set(title=f'Confusion matrix for {task.upper()} on {get_dataname(dataname)}')
+      display.plot(ax=ax);
+    plt.xticks(rotation=45)
+    plt.xlabel('Predicted emotion')
+    plt.ylabel('Target emotion')
+    plt.show()
+
+  if 1: #show images error
+    err_img = {task: {w:np.concatenate([results[dataname][run]['error-images'][task][w] for run in DATASET.keys()],axis=0) for w in ['images','y_true','y_pred']} for task in tasks}
+    print('Total number of error-images on tasks:',{t:len(err_img[t]['images']) for t in err_img.keys()})
+    plt.rcParams["axes.grid"] = False
+    _cap = lambda x: x[:2].capitalize()
+    for task in err_img.keys():
+      labs = DATA_INFO['task_label_imgcount'][task][0]
+      err_lab = np.array([f'{task}:{_cap(labs[i_true])}>{_cap(labs[i_pred])}' for i_true,i_pred in zip(err_img[task]['y_true'],err_img[task]['y_pred'])])
+      print('Task=',task,' => errors=',len(err_lab))
+      ncols = 6
+      show_idx = np.random.choice(len(err_lab),(len(err_lab)//ncols)*ncols,replace=False)
+      show_images(err_img[task]['images'][show_idx], err_lab[show_idx], ncols)
+#=====================================================================#
+if 1:
+  for dataname in DATA_LISTNAME[3:4]:
+    create_model = 'create_AttentionDenseNet'
+    hist_path = f'{EXPR_PATH}/{create_model}_{dataname}'
+    print('History of data:',dataname)
+    # show_training_history(dataname, hist_path)
+    show_confusion_matrix(dataname, hist_path)
+
+'''********* SHOW VISUALIZATION OF THE MODEL ON IMAGES ************'''
+#====================================================================#
+def show_attention(modelfile, dataset): #only an image
+  model = tf.keras.models.load_model(modelfile)
+  # model.summary()
+  itask = {'FER':-2}
+  last_conv_layers = {t: model.layers[itask[t]] for t in itask.keys()}
+  print([last_conv_layers[t].name for t in itask.keys()])
+
+  images,labels = get_images_labels(dataset)
+  print(images.shape,labels.shape)
+
+  '''********** Very very IMPORTANT **********'''
+  with tf.GradientTape() as tape:
+    outputs = [model.output]
+    for t in itask.keys():
+        outputs.append(last_conv_layers[t].output)
+    iterate = tf.keras.models.Model([model.inputs], outputs)
+    output_emotion,output_pooling = iterate(images)
+  '''********** End end IMPORTANT **********'''
+
+  image = images[0]
+  viz_weights = output_pooling
+  # Reshape the vizualization weights
+  num_weights = tf.shape(viz_weights)[-1]
+  # print(viz_weights,num_weights)
+  i_height,i_width = tf.shape(image)[-3:-1]
+  ratio = tf.math.sqrt(num_weights/(i_height*i_width))
+  w_height, w_width = ratio*tf.cast(i_height,tf.float64), ratio*tf.cast(i_width,tf.float64)
+  w_height, w_width = int(tf.math.ceil(w_height)),int(tf.math.ceil(w_width))
+  # print(ratio,w_height, w_width)
+  p_left = (w_height*w_width-num_weights)//2
+  p_right = w_height*w_width-num_weights-p_left
+  viz_weights = tf.pad(viz_weights, [[0,0],[p_left,p_right]])
+  # print(viz_weights)
+  viz_weights = tf.keras.layers.Reshape((w_height, w_width))(viz_weights)
+  # print(viz_weights)
+  weight = viz_weights[0]
+  # print(weight)
+  # Plot the images
+  c = 'gray' if image.shape[-1]==1 else None
+  fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(10, 5))
+  ax[0].imshow(image, cmap=c)
+  ax[0].set_title(f"Original")
+  ax[0].axis("off")
+  img = ax[1].imshow(image, cmap=c)
+  ax[1].imshow(weight, cmap="inferno", alpha=0.6, extent=img.get_extent())
+  ax[1].set_title(f"Attended")
+  ax[1].axis("off")
+  plt.axis("off")
+  plt.show()
+#====================================================================#
+def show_tSNE(modelfile, dataset):
+  from sklearn.manifold import TSNE
+  model = tf.keras.models.load_model(modelfile)
+  outputs = model.layers[-2].output
+  model = tf.keras.models.Model([model.inputs], [outputs])
+  # model.summary()
+  images,labels = get_images_labels(dataset)
+  if 1: #just for FER teask only
+    labels = labels['FER']
+  features = model(images)
+  # print(features)
+  tsne = TSNE(n_components=2).fit_transform(features)
+
+  # scale and move the coordinates so they fit [0; 1] range
+  def _scale_to_01_range(x):
+    value_range = (np.max(x) - np.min(x))
+    starts_from_zero = x - np.min(x)
+    return starts_from_zero / value_range
+
+  tx = tsne[:, 0]
+  ty = tsne[:, 1]
+  tx = _scale_to_01_range(tx)
+  ty = _scale_to_01_range(ty)
+
+  fig = plt.figure()
+  ax = fig.add_subplot(111)
+  import matplotlib.colors as mcolors
+  labels = [lab.split(':')[-1][:2].capitalize() for lab in labels]
+  unique_label = np.unique(labels)
+  label_color = {label:list(mcolors.TABLEAU_COLORS)[i] for i,label in enumerate(unique_label)}
+  # print(label_color)
+  for label,color in label_color.items():
+      # find the samples of the current class in the data
+      indices = [i for i, l in enumerate(labels) if l == label]
+      # extract the coordinates of the points of this class only
+      current_tx = np.take(tx, indices)
+      current_ty = np.take(ty, indices)
+      # convert the class color to matplotlib format
+      # color = np.array(colors_per_class[label], dtype=np.float) / 255
+      # add a scatter plot with the corresponding color and label
+      ax.scatter(current_tx, current_ty, c=color, label=label)
+  # build a legend using the labels we set previously
+  ax.legend(loc='upper center', bbox_to_anchor=(0.5, 1.1), ncol=len(label_color), labelspacing=0.05, handletextpad=0.05) #loc='best')
+  # finally, show the plot
+  plt.show()
+#====================================================================#
+def show_heatmap(modelfile, dataset):
+    model = tf.keras.models.load_model(modelfile)
+    # model.summary()
+    # (ifer, ifr) = (-1,-2) if 'FER' in model.layers[-1].name else (-2,-1)
+    itask = {'FER':-3}
+    last_conv_layers = {t: model.layers[itask[t]] for t in itask.keys()}
+    print([last_conv_layers[t].name for t in itask.keys()])
+
+    images,labels = get_images_labels(dataset)
+    labels = labels['FER']
+    print(images.shape,labels.shape)
+
+    num_imgs = len(images)
+    num_cols = 6
+    num_rows = num_imgs//num_cols + (1 if num_imgs%num_cols!=0 else 0)
+    hs = images[0].shape[0]/images[0].shape[1]*2.5
+    figsize=(num_cols*hs,(num_imgs//num_cols+min(1,num_imgs%num_cols))*hs*1.2)
+    fig = plt.figure(figsize=figsize)
+    print('Figure: nrows,ncols=',num_rows,num_cols)
+
+    k = 1
+    for img,lab in zip(images,labels):
+        x = np.expand_dims(img,axis=0)
+        # print(x.shape, end='')
+        preds = model.predict(x)
+        # print(preds.shape)
+
+        '''********** Very very IMPORTANT **********'''
+        with tf.GradientTape() as tape:
+            outputs = [model.output]
+            for t in itask.keys():
+                outputs.append(last_conv_layers[t].output)
+            iterate = tf.keras.models.Model([model.inputs], outputs)
+            outputs = iterate(x)
+            # model_out, lcl_fr,lcl_fer = iterate(x)
+            # lcl = {'FR':lcl_fr,'FER':lcl_fer}
+
+            task_heatmap = {}
+            model_out,conv_outputs = outputs[0], outputs[1:]
+            # list_task = list(itask.keys())
+            # lcl = [lcl[task] for task in list_task]
+            class_out = [model_out[task][:, np.argmax(model_out[task][0])] for task in itask.keys()]
+            grads = tape.gradient(class_out, conv_outputs)
+            num_grads = np.arange(len(grads))
+            for i in num_grads:
+                pooled_grads = tf.keras.backend.mean(grads[i], axis=(0, 1, 2))
+
+                heatmap = tf.reduce_mean(tf.multiply(pooled_grads, conv_outputs[i]), axis=-1)
+                heatmap = np.maximum(heatmap, 0)
+                heatmap /= np.max(heatmap)
+                heatmap = heatmap.reshape(model.layers[itask[list(itask.keys())[i]]].output.shape[1:3])
+                '''********** End of IMPORTANT **********'''
+                heatmap = cv2.resize(heatmap, (img.shape[1], img.shape[0]))
+                heatmap = cv2.applyColorMap(np.uint8(255*heatmap), cv2.COLORMAP_JET)
+                task_heatmap[i] = heatmap
+
+            heatmap = np.zeros(heatmap.shape)
+            for i in num_grads:
+                heatmap += (1.0/len(itask))*task_heatmap[i]
+
+            intensity = 0.5
+            img = (img+1)/2*255
+            img = heatmap * intensity + img
+            img = np.clip(img.astype('int'),0,255)
+
+            ax = fig.add_subplot(num_rows,num_cols,k)
+            k = k+1
+            ax.set_title(lab)
+            if img.shape[2]==1: #for image in 2D (no channels)
+                img = np.stack((img[:,:,0],)*3, axis=-1)
+            ax.imshow(img) #(img+1)/2.0) #convert [-1,1] to [0,1]
+    # break
+    # fig.suptitle(title)
+    plt.show()
+#=====================================================================#
+dataname = DATA_LISTNAME[3]
+DATASET = dataset_experiment(dataname, shuffle=False)
+
+if 0: #show attention
+  run = list(DATASET.keys())[0]
+  ds = DATASET[run]['train'].take(1)
+  modelfile = f'{EXPR_PATH}/create_AttentionDenseNet_{dataname}/attentiondensenetmodel_{dataname}_{len(DATASET)}r{run}.h5'
+  show_attention(modelfile, ds)
+
+if 1: #show tSNE & heatmap
+  for k in DATASET.keys():
+    if k!=0: continue
+    # modelfile = f'{EXPR_PATH}/create_AttentionDenseNet_{dataname}/attentiondensenetmodel_{dataname}_{len(DATASET)}r{k}.h5'
+    modelfile = max(glob.glob(f'{EXPR_PATH}/create_AttentionDenseNet_{dataname}/attentiondensenetmodel_{dataname}_{len(DATASET)}r{k}*.h5'), key=os.path.getctime)
+    example = DATASET[k]['train'].concatenate(DATASET[k]['valid']).concatenate(DATASET[k]['test'])
+
+    if 0: #show tSNE
+      show_tSNE(modelfile,example)
+    if 1: #show heatmap
+      t = list(DATA_INFO['task_label_imgcount'].keys())[0]
+      for lab in DATA_INFO['task_label_imgcount'][t][0]:
+        filter_task_label = {t:[lab]}
+        print('Filtered by:',filter_task_label)
+        ds,indices = get_dataset_by_classes(example, filter_task_label=filter_task_label, maxsize=60)
+        show_heatmap(modelfile, ds)
