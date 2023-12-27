@@ -29,7 +29,6 @@ if __name__ == '__main__':
   EXPR_PATH = f'{BASE_PATH}/@DetaiNCKH.HOU.2022/@CIT_Bulgaria/Experiments'
   if not os.path.exists('/content/.config/application_default_credentials.json'):
     !gcloud auth application-default login --no-launch-browser  # >>> AUTH to duongthanglong@gmail.com for GCS
-  '''>>> GCS console: Add PERMISSION [Storage Object Viewer] to service-495559152420@cloud-tpu.iam.gserviceaccount.com <<<'''
 #==============================================================================#
 
 '''********************** GET & READ & AUGMENT DATASET **********************'''
