@@ -1,0 +1,10 @@
+The datasets used for experiments in this research are:
+1. [CK+], accessible at [https://gts.ai/dataset-download/ck-dataset-ai-data-collection] and cited as [P. Lucey, J. F. Cohn, T. Kanade, J. Saragih and Z. Ambadar, "The Extended Cohn-Kanade Dataset (CK+): A complete dataset for action unit and emotion-specified expression," IEEE Computer Society Conference on Computer Vision and Pattern Recognition - Workshops, pp. 94-101, 2010. https://doi.org/10.1109/CVPRW.2010.5543262]
+                        
+2. [OuluCASIA], accessible at [https://www.oulu.fi/en/university/faculties-and-units/faculty-information-technology-and-electrical-engineering/center-for-machine-vision-and-signal-analysis#accordion-control-oulu-casia-nirvis-facial-expression-database] and cited as [G. Zhao, X. Huang, M. Taini, S. Z. Li and M. Pietikäinen, "Facial expression recognition from near-infrared videos," Image and Vision Computing, vol. 29, p. 607–619, 2011]
+
+3. [RAF-DB], accessible at [http://whdeng.cn/RAF/model1.html] and cited as [S. a. D. W. Li, "Reliable Crowdsourcing and Deep Locality-Preserving Learning for Unconstrained Facial Expression Recognition," IEEE Transactions on Image Processing, vol. 28, no. 1, pp. 356-370, 2019]
+
+4. [FERplus], accessible at [https://www.kaggle.com/c/challenges-in-representation-learning-facial-expression-recognition-challenge/data] and cited as [C. Z. C. C. F. a. Z. Z. Emad Barsoum, "Training Deep Networks for Facial Expression Recognition with Crowd-Sourced Label Distribution," ACM International Conference on Multimodal Interaction, p. https://doi.org/10.48550/arXiv.1608.01041, 2016]
+
+5. [AffectNet], accessible at [http://mohammadmahoor.com/databases-codes] and cited as [A. MOLLAHOSSEINI, B. HASANI and M. H. MAHOOR, "AffectNet: A Database for Facial Expression, Valence, and Arousal Computing in the Wild," IEEE Transactions on Affective Computing, vol. 10, pp. 18-31; https://arxiv.org/abs/1708.03985, 2017]
