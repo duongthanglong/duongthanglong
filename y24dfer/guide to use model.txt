@@ -1,4 +1,0 @@
-The model is split into two parts with the suffixes 'aa' and 'ab'. These parts must be merged into a single file with the .keras extension to load and use the model for inference.
-
-For example, on macOS, you can merge the files with the following command:
-     cat  model_CKplus_24Oct15_134344_*  >  model_CKplus_24Oct15_134344_x.keras
